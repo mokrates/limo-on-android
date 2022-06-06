@@ -1,0 +1,402 @@
+(import "enumerate.limo")
+
+(defun print x   ;; because of warn-once
+  ())  ;; do nothing
+
+;;; what i need to run on android bearably
+(defun list-to-string (l)
+  (if l
+      (string-concat (car l) (list-to-string (cdr l)))
+      ""))
+
+(defmacro exc-wrapper body
+  `(finally
+    (try
+     (progn ,@body)
+     (progn
+      (android-logi (list-to-string (write-to-list _exception)))
+      (for-each s _stacktrace
+	(android-logi (list-to-string (write-to-list s))))
+      (android-logi (list-to-string (write-to-list _exception)))
+      (android-abort)))
+    (android-logi "LEAVING EXC-WRAPPER")))
+
+;;; my screen-class
+
+
+
+;;;;;;;;;;;;;;;; this is the main program
+
+(android-logi "it runs! it frigging runs!") ;;; do nothing yet.
+
+
+;; keyboard
+;; 1 2 3 4 5 6 7 8 9 0
+;; q w e r t y u i o p
+;;  a s d f g h j k l
+;; ^ y x c v b n m <=
+;; == , [      ] . ==
+
+;;; sooo now we can see exceptions
+
+(exc-wrapper
+
+ ;; i don't yet really know what i want to represent with this
+ ;; possibilities:
+ ;; 1. the screen. (clickable?)
+ ;; 2. text that is possibly wrapped around, clickable and accompanyable by a keyboard.
+ (defclass interface ()
+   (defmethod init (self fontsize statusbarsize navbarsize)
+     ;; modifies screen when initialized
+     (setmember [self . _fontsize] fontsize)
+     (mogl22d-setsize fontsize)
+
+     (setmember [self . _statusbarsize] statusbarsize)  ;; TODO: i don't know to get that, yet
+     (setmember [self . _navbarsize] navbarsize)        ;; TODO: ditto
+     
+     (unify (gwidth gheight) (mogl22d-getglyphsize))
+     (setmember [self . _gwidth] gwidth)
+     (setmember [self . _gheight] gheight)
+     
+     (unify (display-width display-height) (mogl22d-getdisplaysize))
+     (setmember [self . _display-width] display-width)
+     (setmember [self . _display-height] display-height)
+     (setmember [self . _width-in-glyphs] (idiv display-width gwidth))
+     (setmember [self . _height-in-glyphs] (idiv (- display-height statusbarsize navbarsize) gheight))
+     
+     (setmember [self . _showkeyboard?] nil))
+   
+   (defmethod setcontents (self contents)
+     (setmember [self . _contents] contents))
+   
+   (defmethod setkeyboard (self keyboard)
+     (setmember [self . _keyboard] keyboard))
+   
+   (defmethod toggle-keyboard (self . show-keyboard?)
+     (if show-keyboard?
+	 (setmember [self . _show-keyboard?] (car show-keyboard?))
+	 (setmember [self . _show-keyboard?] (not [self . _show-keyboard?]))))
+   
+   (defmethod update (self)     ;; TODO: this doesn't care about too long lines yet...
+     
+     (android-logi "setting fontsize")
+     (mogl22d-setsize [self . _fontsize])
+     
+     (android-logi "clearing display")
+     (mogl22d-clear)
+     (android-logi "display cleared")
+     (setmember [self . _clickareas] ())
+     (android-logi "clickareas set")
+     
+     (setq maxlines
+	   (if [self . _show-keyboard?]
+	       (- [self . _height-in-glyphs] (list-length [self . _keyboard]))
+	       [self . _height-in-glyphs]))
+     
+     (setq nline 0)
+     (for-each l [self . _contents]
+       :breakable
+       (setq xpos 0)
+       (for-each item l
+	 (mogl22d-gotoxy  (* xpos [self . _gwidth]) (+ [self . _statusbarsize] (* nline [self . _gheight])))
+	 (mogl22d-setcolor (car item) (cadr item))
+	 (mogl22d-write (caddr item))
+	 (setq new-xpos (+ xpos (string-length (caddr item))))
+	 
+	 (when (cdddr item)    ;; action-listener?
+	     (setmember [self . _clickareas]
+			(cons (list (car (cdddr item))    ;; the function
+				    (* xpos [self . _gwidth])
+				    (+ [self . _statusbarsize] (* nline [self . _gheight]))
+				    (* new-xpos [self . _gwidth])
+				    (+ [self . _statusbarsize] (* (+ 1 nline) [self . _gheight])))
+			      [self . _clickareas])))
+	 (setf xpos new-xpos))
+       
+       (when (>= (incf nline) maxlines)
+	 (break)))
+     
+    ;;; keyboard?
+     (when [self . _show-keyboard?]
+       (setf nline (- [self . _height-in-glyphs] (list-length [self . _keyboard])))
+       (for-each l [self . _keyboard]
+	 :breakable
+	 (setq xpos 0)
+	 (for-each item l
+	   (mogl22d-gotoxy (* xpos [self . _gwidth]) (+ [self . _statusbarsize] (* nline [self . _gheight])))
+	   (mogl22d-setcolor (car item) (cadr item))
+	   (mogl22d-write (caddr item))
+	   (setq new-xpos (+ xpos (string-length (caddr item))))
+	   
+	   (when (cdddr item)    ;; action-listener?
+	     (setmember [self . _clickareas]
+			(cons (list (car (cdddr item))    ;; the function
+				    (* xpos [self . _gwidth])
+				    (+ [self . _statusbarsize] (* nline [self . _gheight]))
+				    (* new-xpos [self . _gwidth])
+				    (+ [self . _statusbarsize] (* (+ 1 nline) [self . _gheight])))
+			      [self . _clickareas])))
+	   (setf xpos new-xpos))
+	 
+	 (when (>= (incf nline) [self . _height-in-glyphs])
+	   (break))))
+     (mogl22d-flip))
+ 
+ 
+   (defmethod wait-and-dispatch (self)
+     (block _end
+       (while :t
+	 
+	 (while (not (and (android-poll-events :t) _android-last-event))
+	   ())   ;; do nothing
+	 
+	 (cond ((and (consp _android-last-event)
+		     (= (car _android-last-event) 'AMOTION_EVENT_ACTION_UP))
+		(unify (event_ignore x y) _android-last-event)
+		(for-each action [self . _clickareas]
+		  (unify (fun x1 y1 x2 y2) action)
+		  (when (and (>= x x1) (>= y y1)
+			     (<= x x2) (<= y y2)
+			     (setq res (fun)))
+		    (return-from _end res))))
+	       
+	       (:else ;; unknown event
+		()))))))
+ 
+ 
+ ;; main program
+ 
+ (while (not (mogl22d-inited))   ;;; TODO: i have to see what i am doing about this
+   (android-poll-events :t))
+ 
+ (setq the-edit-line "")
+ (setq results ())
+
+ (defun wrap-line (line width)
+   (if (> (string-length line) width)
+       (cons (string-slice line 0 width)
+	     (wrap-line (string-slice line width (string-length line)) width))
+       (list line)))
+ 
+ (defun insert-key (key)
+   (setf the-edit-line (string-concat the-edit-line key))
+   (update-display))
+
+ (defun backspace ()
+   (setf the-edit-line (string-slice the-edit-line 0 (- (string-length the-edit-line) 1)))
+   (update-display))
+
+ (defun enter-key ()    ;; TODO...
+   (setq l the-edit-line)
+   (setf results (cons the-edit-line results))
+   (setf the-edit-line "")
+   (update-display)
+
+   (setf results
+	 (cons l
+	       (cons
+		(list-to-string
+		 (undyn
+		  (write-to-list
+		   (try
+		    (eval (read-string l))
+		    _exception))))
+		(cdr results))))
+   (update-display))
+
+ (defun update-display ()
+   (setq res (apply append (map (lambda (y) (map (lambda (x) `((7 0 ,x)))
+					    (wrap-line y width-in-glyphs]))
+				results)))
+   
+   (android-logi (list-to-string (undyn (write-to-list res))))
+   (setf contents `(((7 0 "1. Limo App"))
+		    ((7 0 "-----------"))
+		    ,@(map (lambda (x) `((7 0 ,x)))
+			   (wrap-line (string-concat the-edit-line (chr 219))
+				      (- width-in-glyphs 1)))
+		    ,@res))
+   [iface setcontents contents]
+   [iface update])
+ 
+ (setq iface (new interface 32 32 100))
+ (setq width-in-glyphs [iface . _width-in-glyphs])
+ 
+ (setq contents `(((7 0 "1. Limo App"))
+		  ((7 0 "-----------"))))
+
+ (defun switch-keyb (keyboard)
+   [iface setkeyboard keyboard]
+   [iface update])
+ 
+ (setq minuscle-alpha-keyb
+       `(((0 7 " 1 " ,(curry insert-key "1")) (7 0 " ")
+	  (0 7 " 2 " ,(curry insert-key "2")) (7 0 " ")
+	  (0 7 " 3 " ,(curry insert-key "3")) (7 0 " ")
+	  (0 7 " 4 " ,(curry insert-key "4")) (7 0 " ")
+	  (0 7 " 5 " ,(curry insert-key "5")) (7 0 " ")
+	  (0 7 " 6 " ,(curry insert-key "6")) (7 0 " ")
+	  (0 7 " 7 " ,(curry insert-key "7")) (7 0 " ")
+	  (0 7 " 8 " ,(curry insert-key "8")) (7 0 " ")
+	  (0 7 " 9 " ,(curry insert-key "9")) (7 0 " ")
+	  (0 7 " 0 " ,(curry insert-key "0")) (7 0 " "))
+	 ()
+	 ((0 7 " q " ,(curry insert-key "q")) (7 0 " ")
+	  (0 7 " w " ,(curry insert-key "w")) (7 0 " ")
+	  (0 7 " e " ,(curry insert-key "e")) (7 0 " ")
+	  (0 7 " r " ,(curry insert-key "r")) (7 0 " ")
+	  (0 7 " t " ,(curry insert-key "t")) (7 0 " ")
+	  (0 7 " y " ,(curry insert-key "y")) (7 0 " ")
+	  (0 7 " u " ,(curry insert-key "u")) (7 0 " ")
+	  (0 7 " i " ,(curry insert-key "i")) (7 0 " ")
+	  (0 7 " o " ,(curry insert-key "o")) (7 0 " ")
+	  (0 7 " p " ,(curry insert-key "p")) (7 0 " "))
+	 ()
+	 ((7 0 " ")
+	  (0 7 " a " ,(curry insert-key "a")) (7 0 " ")
+	  (0 7 " s " ,(curry insert-key "s")) (7 0 " ")
+	  (0 7 " d " ,(curry insert-key "d")) (7 0 " ")
+	  (0 7 " f " ,(curry insert-key "f")) (7 0 " ")
+	  (0 7 " g " ,(curry insert-key "g")) (7 0 " ")
+	  (0 7 " h " ,(curry insert-key "h")) (7 0 " ")
+	  (0 7 " j " ,(curry insert-key "j")) (7 0 " ")
+	  (0 7 " k " ,(curry insert-key "k")) (7 0 " ")
+	  (0 7 " l " ,(curry insert-key "l")) (7 0 " "))
+	 ()
+	 ((0 7 "(^)" ,(lambda () (switch-keyb majuscle-alpha-keyb))) (7 0 " ")
+	  (0 7 " z " ,(curry insert-key "z")) (7 0 " ")
+	  (0 7 " x " ,(curry insert-key "x")) (7 0 " ")
+	  (0 7 " c " ,(curry insert-key "c")) (7 0 " ")
+	  (0 7 " v " ,(curry insert-key "v")) (7 0 " ")
+	  (0 7 " b " ,(curry insert-key "b")) (7 0 " ")
+	  (0 7 " n " ,(curry insert-key "n")) (7 0 " ")
+	  (0 7 " m " ,(curry insert-key "m")) (7 0 "  ")
+	  (0 7 "  <-- " ,backspace) (7 0 " "))
+	 ()
+	 ((0 7 "(@)" ,(lambda () (switch-keyb symbol-keyboard))) (7 0 " ")
+	  (0 7 " , " ,(curry insert-key ",")) (7 0 " ")
+	  (0 7 "[           ]" ,(curry insert-key " ")) (7 0 " ")
+	  (0 7 " . " ,(curry insert-key ".")) (7 0 " ")
+	  (0 7 " -> " ,enter-key))))
+ 
+
+ (setq majuscle-alpha-keyb
+       `(((0 7 " ! " ,(curry insert-key "!")) (7 0 " ")
+	  (0 7 " @ " ,(curry insert-key "@")) (7 0 " ")
+	  (0 7 " # " ,(curry insert-key "#")) (7 0 " ")
+	  (0 7 " $ " ,(curry insert-key "$")) (7 0 " ")
+	  (0 7 " % " ,(curry insert-key "%")) (7 0 " ")
+	  (0 7 " ^ " ,(curry insert-key "^")) (7 0 " ")
+	  (0 7 " & " ,(curry insert-key "&")) (7 0 " ")
+	  (0 7 " * " ,(curry insert-key "*")) (7 0 " ")
+	  (0 7 " ( " ,(curry insert-key "(")) (7 0 " ")
+	  (0 7 " ) " ,(curry insert-key ")")) (7 0 " "))
+	 ()
+	 ((0 7 " Q " ,(curry insert-key "Q")) (7 0 " ")
+	  (0 7 " W " ,(curry insert-key "W")) (7 0 " ")
+	  (0 7 " E " ,(curry insert-key "E")) (7 0 " ")
+	  (0 7 " R " ,(curry insert-key "R")) (7 0 " ")
+	  (0 7 " T " ,(curry insert-key "T")) (7 0 " ")
+	  (0 7 " Y " ,(curry insert-key "Y")) (7 0 " ")
+	  (0 7 " U " ,(curry insert-key "U")) (7 0 " ")
+	  (0 7 " I " ,(curry insert-key "I")) (7 0 " ")
+	  (0 7 " O " ,(curry insert-key "O")) (7 0 " ")
+	  (0 7 " P " ,(curry insert-key "P")) (7 0 " "))
+	 ()
+	 ((7 0 " ")
+	  (0 7 " A " ,(curry insert-key "A")) (7 0 " ")
+	  (0 7 " S " ,(curry insert-key "S")) (7 0 " ")
+	  (0 7 " D " ,(curry insert-key "D")) (7 0 " ")
+	  (0 7 " F " ,(curry insert-key "F")) (7 0 " ")
+	  (0 7 " G " ,(curry insert-key "G")) (7 0 " ")
+	  (0 7 " H " ,(curry insert-key "H")) (7 0 " ")
+	  (0 7 " J " ,(curry insert-key "J")) (7 0 " ")
+	  (0 7 " K " ,(curry insert-key "K")) (7 0 " ")
+	  (0 7 " L " ,(curry insert-key "L")) (7 0 " "))
+	 ()
+	 ((0 7 "(^)" ,(lambda () (switch-keyb minuscle-alpha-keyb))) (7 0 " ")
+	  (0 7 " Z " ,(curry insert-key "Z")) (7 0 " ")
+	  (0 7 " X " ,(curry insert-key "X")) (7 0 " ")
+	  (0 7 " C " ,(curry insert-key "C")) (7 0 " ")
+	  (0 7 " V " ,(curry insert-key "V")) (7 0 " ")
+	  (0 7 " B " ,(curry insert-key "B")) (7 0 " ")
+	  (0 7 " N " ,(curry insert-key "N")) (7 0 " ")
+	  (0 7 " M " ,(curry insert-key "M")) (7 0 "  ")
+	  (0 7 "  <-- " ,backspace) (7 0 " "))
+	 ()
+	 ((0 7 "(@)" ,(lambda () (switch-keyb symbol-keyboard))) (7 0 " ")
+	  (0 7 " _ " ,(curry insert-key ",")) (7 0 " ")
+	  (0 7 "[          ]" ,(curry insert-key " ")) (7 0 " ")
+	  (0 7 " - " ,(curry insert-key ".")) (7 0 " ")
+	  (0 7 " -> " ,enter-key))))
+
+
+ (setq symbol-keyboard
+       `(((0 7 " ! " ,(curry insert-key "!")) (7 0 " ")
+	  (0 7 " @ " ,(curry insert-key "@")) (7 0 " ")
+	  (0 7 " # " ,(curry insert-key "#")) (7 0 " ")
+	  (0 7 " $ " ,(curry insert-key "$")) (7 0 " ")
+	  (0 7 " % " ,(curry insert-key "%")) (7 0 " ")
+	  (0 7 " ^ " ,(curry insert-key "^")) (7 0 " ")
+	  (0 7 " & " ,(curry insert-key "&")) (7 0 " ")
+	  (0 7 " * " ,(curry insert-key "*")) (7 0 " ")
+	  (0 7 " ( " ,(curry insert-key "(")) (7 0 " ")
+	  (0 7 " ) " ,(curry insert-key ")")) (7 0 " "))
+	 ()
+	 ((0 7 " _ " ,(curry insert-key "_")) (7 0 " ")
+	  (0 7 " - " ,(curry insert-key "-")) (7 0 " ")
+	  (0 7 " + " ,(curry insert-key "+")) (7 0 " ")
+	  (0 7 " = " ,(curry insert-key "=")) (7 0 " ")
+	  (0 7 " , " ,(curry insert-key ",")) (7 0 " ")
+	  (0 7 " ; " ,(curry insert-key ";")) (7 0 " ")
+	  (0 7 " . " ,(curry insert-key ".")) (7 0 " ")
+	  (0 7 " : " ,(curry insert-key ":")) (7 0 " ")
+	  (0 7 " [ " ,(curry insert-key "[")) (7 0 " ")
+	  (0 7 " ] " ,(curry insert-key "]")) (7 0 " "))
+	 ()
+	 ((7 0 " ")
+	  (0 7 " { " ,(curry insert-key "{")) (7 0 " ")
+	  (0 7 " } " ,(curry insert-key "}")) (7 0 " ")
+	  (0 7 " ~ " ,(curry insert-key "~")) (7 0 " ")
+	  (0 7 " ` " ,(curry insert-key "`")) (7 0 " ")
+	  (0 7 " ? " ,(curry insert-key "?")) (7 0 " ")
+	  (0 7 " / " ,(curry insert-key "/")) (7 0 " ")
+	  (0 7 " < " ,(curry insert-key "<")) (7 0 " ")
+	  (0 7 " > " ,(curry insert-key ">")) (7 0 " ")
+	  (0 7 " \\ " ,(curry insert-key "\\")) (7 0 " "))
+	 ()
+	 ((0 7 "(a)" ,(lambda () (switch-keyb minuscle-alpha-keyb))) (7 0 " ")
+	  (0 7 " | " ,(curry insert-key "|")) (7 0 " ")
+	  (0 7 " \" " ,(curry insert-key "\"")) (7 0 " ")
+	  (0 7 " ' " ,(curry insert-key "'")) (7 0 " ")
+	  (0 7 " X " ,(curry insert-key "V")) (7 0 " ")
+	  (0 7 " X " ,(curry insert-key "B")) (7 0 " ")
+	  (0 7 " X " ,(curry insert-key "N")) (7 0 " ")
+	  (0 7 " X " ,(curry insert-key "M")) (7 0 "  ")
+	  (0 7 "  <-- " ,backspace) (7 0 " "))
+	 ()
+	 ((0 7 "(A)" ,(lambda () (switch-keyb majuscle-alpha-keyb))) (7 0 " ")
+	  (0 7 " _ " ,(curry insert-key ",")) (7 0 " ")
+	  (0 7 "[          ]" ,(curry insert-key " ")) (7 0 " ")
+	  (0 7 " - " ,(curry insert-key ".")) (7 0 " ")
+	  (0 7 " -> " ,enter-key))))
+
+
+ (android-logi "setting contents")
+ [iface setcontents contents]
+ 
+ (android-logi "setting keyb")
+ [iface setkeyboard minuscle-alpha-keyb]
+ 
+ (android-logi "enabling keyb")
+ [iface toggle-keyboard :t]
+ 
+ (android-logi "painting display")
+ [iface update]
+
+ (android-logi "display-painted")
+ 
+ (while :t
+   [iface wait-and-dispatch])
+ 
+ (android-abort))

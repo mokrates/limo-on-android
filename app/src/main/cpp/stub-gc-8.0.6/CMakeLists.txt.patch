@@ -1,0 +1,12 @@
+28c28
+< INCLUDE(CTest)
+---
+> # INCLUDE(CTest)
+50c50
+< OPTION(enable_threads "TODO" NO)
+---
+> OPTION(enable_threads "TODO" ON)
+252c252
+< ADD_SUBDIRECTORY(tests)
+---
+> # ADD_SUBDIRECTORY(tests)
