@@ -498,7 +498,7 @@ extern "C" {
     __builtin_trap();
   }
 
-  limo_data *init_android_limo()
+  limo_data *init_android_limo(struct android_app* state)
   {
     limo_data *env;
     env = limo_init(0, NULL);
@@ -514,6 +514,9 @@ extern "C" {
     setq(env, make_sym((char *)"android-poll-events"), make_builtin(builtin_android_poll_events));
     setq(env, make_sym((char *)"android-logi"), make_builtinfun(builtin_android_logi));
     setq(env, make_sym((char *)"android-abort"), make_builtinfun(builtin_android_abort));
+    
+    setq(env, make_sym((char *)"android-internal-data-path"), make_string((char *)state->activity->internalDataPath));
+    
     setq(env, make_sym((char *)"_ANDROID-LAST-EVENT"), nil);
     return env;
   }
@@ -557,7 +560,7 @@ void android_main(struct android_app* state) {
         engine.state = *(struct saved_state*)state->savedState;
     }
 
-    env = init_android_limo();
+    env = init_android_limo(state);
     engine.env = env;
 
     rs = limo_rs_from_string((char *)_program_limo, env);
